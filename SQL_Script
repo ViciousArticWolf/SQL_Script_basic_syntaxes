@@ -1,0 +1,335 @@
+-- ====================================================
+-- MySQL SQL Proficiency Demo Script
+-- Compatible with MySQL 8.x using basic / common SQL features
+-- (no CTEs, no window functions, no materialized views,
+--  no stored functions / advanced PG-only syntax)
+-- ====================================================
+
+-- 0. Cleanup & create DB
+DROP DATABASE IF EXISTS demo_mysql;
+CREATE DATABASE demo_mysql;
+USE demo_mysql;
+
+-- ====================================================
+-- 1. TABLES (basic datatypes & constraints)
+-- ====================================================
+CREATE TABLE suppliers (
+  supplier_id    INT AUTO_INCREMENT PRIMARY KEY,
+  supplier_name  VARCHAR(100) NOT NULL,
+  contact_email  VARCHAR(100),
+  country        VARCHAR(50)
+);
+
+CREATE TABLE products (
+  product_id   INT AUTO_INCREMENT PRIMARY KEY,
+  sku          VARCHAR(30) NOT NULL UNIQUE,
+  name         VARCHAR(150) NOT NULL,
+  category     VARCHAR(50),
+  price        DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  supplier_id  INT,
+  created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (supplier_id) REFERENCES suppliers(supplier_id)
+    ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+CREATE TABLE users (
+  user_id     INT AUTO_INCREMENT PRIMARY KEY,
+  username    VARCHAR(50) NOT NULL UNIQUE,
+  email       VARCHAR(120) NOT NULL UNIQUE,
+  full_name   VARCHAR(100),
+  created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+  metadata    TEXT -- store small JSON-like text if needed
+);
+
+CREATE TABLE inventory (
+  inventory_id INT AUTO_INCREMENT PRIMARY KEY,
+  product_id   INT NOT NULL,
+  qty_on_hand  INT DEFAULT 0,
+  reorder_level INT DEFAULT 10,
+  last_restock DATE,
+  FOREIGN KEY (product_id) REFERENCES products(product_id)
+    ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE orders (
+  order_id     INT AUTO_INCREMENT PRIMARY KEY,
+  user_id      INT,
+  order_date   DATETIME DEFAULT CURRENT_TIMESTAMP,
+  status       VARCHAR(30) DEFAULT 'pending',
+  total_amount DECIMAL(12,2) DEFAULT 0.00,
+  shipping_addr TEXT,
+  FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
+);
+
+CREATE TABLE order_items (
+  order_item_id INT AUTO_INCREMENT PRIMARY KEY,
+  order_id      INT NOT NULL,
+  product_id    INT NOT NULL,
+  unit_price    DECIMAL(10,2) NOT NULL,
+  quantity      INT NOT NULL,
+  FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE,
+  FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE departments (
+  dept_id INT AUTO_INCREMENT PRIMARY KEY,
+  name    VARCHAR(100) NOT NULL
+);
+
+CREATE TABLE employees (
+  emp_id     INT AUTO_INCREMENT PRIMARY KEY,
+  dept_id    INT,
+  manager_id INT,
+  first_name VARCHAR(50),
+  last_name  VARCHAR(50),
+  hired_on   DATE,
+  salary     DECIMAL(12,2),
+  FOREIGN KEY (dept_id) REFERENCES departments(dept_id) ON DELETE SET NULL
+);
+-- Self-reference for manager will be handled by allowing NULLs; FK omitted for simpler portability.
+
+CREATE TABLE audit_logs (
+  log_id   INT AUTO_INCREMENT PRIMARY KEY,
+  entity   VARCHAR(50),
+  entity_id INT,
+  action   VARCHAR(50),
+  performed DATETIME DEFAULT CURRENT_TIMESTAMP,
+  payload  TEXT
+);
+
+-- ====================================================
+-- 2. SAMPLE DATA (random-ish, compact)
+-- ====================================================
+INSERT INTO suppliers (supplier_name, contact_email, country) VALUES
+('NorthStar Supplies','hello@northstar.example','USA'),
+('Eastern Goods Co','sales@easterngoods.example','India'),
+('EuroParts GmbH','contact@europarts.example','Germany');
+
+INSERT INTO products (sku, name, category, price, supplier_id) VALUES
+('SKU-1001','Wireless Mouse','Accessories',19.99,1),
+('SKU-1002','Mechanical Keyboard','Accessories',89.50,1),
+('SKU-2001','USB-C Charger','Electronics',29.95,2),
+('SKU-3001','27in 4K Monitor','Monitors',349.99,3),
+('SKU-4001','Laptop Stand','Accessories',39.00,2),
+('SKU-5001','Noise Cancelling Headphones','Audio',129.90,3);
+
+INSERT INTO users (username,email,full_name,metadata) VALUES
+('alice','alice@mail.example','Alice K','{"loyalty":"gold","ref":"google"}'),
+('bob','bob@mail.example','Bob M','{"loyalty":"silver"}'),
+('carol','carol@mail.example','Carol P','{"loyalty":"bronze","marketing_opt_in":true}'),
+('dave','dave@mail.example','Dave Q','{}');
+
+INSERT INTO inventory (product_id, qty_on_hand, reorder_level, last_restock) VALUES
+(1,120,20,'2025-11-01'),
+(2,30,15,'2025-10-25'),
+(3,5,10,'2025-09-10'),
+(4,12,5,'2025-10-30'),
+(5,0,10,NULL),
+(6,8,5,'2025-11-05');
+
+INSERT INTO departments (name) VALUES ('Engineering'),('Sales'),('HR'),('Support');
+
+INSERT INTO employees (dept_id, first_name, last_name, hired_on, salary) VALUES
+(1,'Priya','Sharma','2020-05-10',120000),
+(1,'Rahul','Verma','2022-07-01',90000),
+(2,'Sam','Lee','2019-03-15',95000),
+(3,'Maya','Roy','2021-11-01',70000),
+(4,'Ishaan','Gupta','2023-01-10',60000);
+
+-- Orders & order_items
+INSERT INTO orders (user_id, order_date, status, shipping_addr) VALUES
+(1,'2025-11-10 09:30:00','completed','221B Baker St'),
+(2,'2025-11-12 16:10:00','processing','42 Wallaby Way'),
+(3,'2025-11-13 11:20:00','completed','10 Downing St'),
+(4,'2025-11-14 08:00:00','pending','1600 Pennsylvania Ave');
+
+-- associate items with orders (we know order_ids autoincremented in same order)
+INSERT INTO order_items (order_id, product_id, unit_price, quantity) VALUES
+(1,1,19.99,1),
+(1,2,89.50,1),
+(2,4,349.99,1),
+(3,3,29.95,3),
+(3,6,129.90,1),
+(4,5,39.00,2);
+
+-- compute totals via UPDATE using subquery (no stored function)
+UPDATE orders o
+SET total_amount = (
+  SELECT IFNULL(SUM(oi.unit_price * oi.quantity),0)
+  FROM order_items oi WHERE oi.order_id = o.order_id
+);
+
+INSERT INTO audit_logs (entity, entity_id, action, payload) VALUES
+('orders',1,'created','{"by":"alice","note":"first order"}'),
+('inventory',3,'restock','{"qty":50,"by":"system"}');
+
+-- ====================================================
+-- 3. INDEXES (CREATE INDEX) & PERFORMANCE hints
+-- ====================================================
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_products_category ON products(category);
+CREATE INDEX idx_orders_userid ON orders(user_id);
+CREATE INDEX idx_inventory_product ON inventory(product_id);
+
+-- ====================================================
+-- 4. VIEW (virtual table)
+-- ====================================================
+CREATE OR REPLACE VIEW customer_order_summary AS
+SELECT u.user_id, u.username, u.email,
+       COUNT(o.order_id) AS orders_count,
+       IFNULL(SUM(o.total_amount),0) AS lifetime_spend,
+       MAX(o.order_date) AS last_order
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.user_id
+GROUP BY u.user_id, u.username, u.email;
+
+-- ====================================================
+-- 5. DEMONSTRATION QUERIES (common important queries)
+--    (these use only features described in your notes)
+-- ====================================================
+
+-- 5.1 Basic SELECT + ORDER + LIMIT
+SELECT product_id, name, price FROM products
+ORDER BY price DESC
+LIMIT 5;
+
+-- 5.2 WHERE + LIKE + IN + BETWEEN
+SELECT * FROM products
+WHERE name LIKE '%USB%' OR name LIKE '%Head%';
+
+SELECT * FROM products WHERE category IN ('Accessories','Audio');
+
+SELECT * FROM orders WHERE order_date BETWEEN '2025-11-01' AND '2025-11-30';
+
+-- 5.3 Aggregation + GROUP BY + HAVING
+SELECT p.category,
+       SUM(oi.quantity) AS total_qty,
+       SUM(oi.quantity * oi.unit_price) AS revenue
+FROM products p
+JOIN order_items oi ON oi.product_id = p.product_id
+JOIN orders o ON o.order_id = oi.order_id
+WHERE o.status = 'completed'
+GROUP BY p.category
+HAVING SUM(oi.quantity) > 0
+ORDER BY revenue DESC;
+
+-- 5.4 JOINS (INNER, LEFT, RIGHT, CROSS, SELF)
+-- Full order detail (inner join)
+SELECT o.order_id, o.order_date, o.status, u.username, p.name, oi.quantity, oi.unit_price
+FROM orders o
+INNER JOIN users u ON u.user_id = o.user_id
+INNER JOIN order_items oi ON oi.order_id = o.order_id
+INNER JOIN products p ON p.product_id = oi.product_id
+ORDER BY o.order_date DESC;
+
+-- LEFT JOIN example (users with orders)
+SELECT u.user_id, u.username, o.order_id, o.total_amount
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.user_id
+ORDER BY u.user_id;
+
+-- SELF JOIN example (employees -> manager)
+-- assuming manager_id holds manager's emp_id
+SELECT e.emp_id AS emp, CONCAT(e.first_name,' ',e.last_name) AS employee,
+       m.emp_id AS manager, CONCAT(m.first_name,' ',m.last_name) AS manager_name
+FROM employees e
+LEFT JOIN employees m ON e.manager_id = m.emp_id;
+
+-- 5.5 Subquery (scalar & IN)
+-- last order total for each user (subquery)
+SELECT u.user_id, u.username,
+  (SELECT o.total_amount FROM orders o WHERE o.user_id = u.user_id ORDER BY o.order_date DESC LIMIT 1) AS last_order_amount
+FROM users u;
+
+-- 5.6 UNION / UNION ALL
+SELECT username AS name, 'user' AS source FROM users
+UNION
+SELECT supplier_name AS name, 'supplier' AS source FROM suppliers;
+
+-- 5.7 UPDATE & DELETE examples
+-- Decrease inventory for sold items (simple example)
+UPDATE inventory i
+SET qty_on_hand = GREATEST(i.qty_on_hand - IFNULL((
+  SELECT SUM(oi.quantity) FROM order_items oi JOIN orders o ON o.order_id = oi.order_id
+  WHERE oi.product_id = i.product_id AND o.order_date >= '2025-11-01'
+),0), 0);
+
+-- Delete products with zero stock (demonstration)
+DELETE p FROM products p
+JOIN inventory i ON i.product_id = p.product_id
+WHERE i.qty_on_hand = 0;
+
+-- 5.8 Transactions, SAVEPOINT, ROLLBACK
+START TRANSACTION;
+  -- pretend to allocate stock for order id 2
+  UPDATE inventory SET qty_on_hand = qty_on_hand - 1 WHERE product_id = 4;
+  SAVEPOINT sp_before_payment;
+  -- simulate failure: roll back to savepoint to undo stock deduction
+  ROLLBACK TO SAVEPOINT sp_before_payment;
+COMMIT;
+
+-- 5.9 ORDER BY expressions & LIMIT
+SELECT u.user_id, u.username, IFNULL(SUM(o.total_amount),0) AS lifetime_spend
+FROM users u LEFT JOIN orders o ON o.user_id = u.user_id
+GROUP BY u.user_id, u.username
+ORDER BY lifetime_spend DESC
+LIMIT 3;
+
+-- 5.10 GROUP BY for cohorts (first order month) via subquery
+SELECT DATE_FORMAT(first_order, '%Y-%m-01') AS cohort_month, COUNT(*) AS users
+FROM (
+  SELECT user_id, MIN(order_date) AS first_order
+  FROM orders
+  GROUP BY user_id
+) t
+GROUP BY cohort_month
+ORDER BY cohort_month;
+
+-- 5.11 CROSS JOIN example (cartesian product demonstration)
+SELECT u.username, p.name
+FROM users u
+CROSS JOIN products p
+LIMIT 8;
+
+-- ====================================================
+-- 6. ALTER / TRUNCATE / DROP examples
+-- ====================================================
+-- Add a column
+ALTER TABLE users ADD COLUMN phone VARCHAR(20);
+
+-- Remove a column (if needed)
+ALTER TABLE users DROP COLUMN phone;
+
+-- Truncate a table
+TRUNCATE TABLE audit_logs;
+
+-- ====================================================
+-- 7. SAMPLE REPORT QUERIES YOU CAN SHOW TO A HIRING MANAGER
+-- ====================================================
+-- Monthly revenue (last 6 months)
+SELECT DATE_FORMAT(order_date, '%Y-%m-01') AS month, SUM(total_amount) AS monthly_revenue
+FROM orders
+WHERE order_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 6 MONTH)
+GROUP BY month
+ORDER BY month;
+
+-- Low inventory alert
+SELECT p.product_id, p.name, i.qty_on_hand, i.reorder_level
+FROM inventory i JOIN products p ON p.product_id = i.product_id
+WHERE i.qty_on_hand <= i.reorder_level
+ORDER BY (i.qty_on_hand - i.reorder_level) ASC;
+
+-- RFM-like: recency (days since last), frequency, monetary
+SELECT t.user_id, DATEDIFF(CURRENT_DATE(), t.last_order) AS days_since_last, t.frequency, t.monetary
+FROM (
+  SELECT u.user_id, MAX(o.order_date) AS last_order, COUNT(o.order_id) AS frequency, IFNULL(SUM(o.total_amount),0) AS monetary
+  FROM users u LEFT JOIN orders o ON o.user_id = u.user_id
+  GROUP BY u.user_id
+) t
+ORDER BY t.monetary DESC;
+
+-- ====================================================
+-- 8. CLEANUP tips (uncomment to drop demo)
+-- ====================================================
+-- DROP VIEW IF EXISTS customer_order_summary;
+-- DROP DATABASE demo_mysql;
